@@ -69,6 +69,7 @@ def test_randwalk_defaults():
     do_kvalue(conv, im, "RandomWalk")
     do_pickle(rw)
     do_pickle(conv)
+    do_pickle(conv, lambda x: x.drawImage())
 
 
 @timer

@@ -209,7 +209,17 @@ class RandomWalk(GSObject):
         """
         get a copy of the points
         """
+        return self._get_points().copy()
+
+    def _get_points(self):
+        """
+        get a reference to the points
+        """
+        if not hasattr(self,'_points'):
+            self._points=self._generate_points(self._npoints)
+
         return self._points
+
 
     @points.setter
     def points(self, points):
@@ -222,8 +232,10 @@ class RandomWalk(GSObject):
     def _sbp(self):
         fluxper=self._flux/self._npoints
         deltas = []
+
+        points=self._get_points()
         with convert_cpp_errors():
-            for p in self._points:
+            for p in points:
                 d = _galsim.SBDeltaFunction(fluxper, self.gsparams._gsp)
                 d = _galsim.SBTransform(d, 1.0, 0.0, 0.0, 1.0, _galsim.PositionD(p[0],p[1]), 1.0,
                                         self.gsparams._gsp)
@@ -254,10 +266,10 @@ class RandomWalk(GSObject):
         """
         calculate the half-light radius of the generated points
         """
-        pts = self._points
-        my,mx=pts.mean(axis=0)
+        points = self._get_points()
+        my,mx=points.mean(axis=0)
 
-        r=np.sqrt( (pts[:,0]-my)**2 + (pts[:,1]-mx)**2)
+        r=np.sqrt( (points[:,0]-my)**2 + (points[:,1]-mx)**2)
 
         hlr=np.median(r)
 
@@ -280,6 +292,10 @@ class RandomWalk(GSObject):
         """
         set the points, either using the input points or
         generating the number of specified points npoints
+
+        Note when npoints= is sent, the generation of points is lazy.   This is
+        important when transformations are to be applied to the profile later,
+        which will always clear any existing set of points.
 
         points
         ------
@@ -306,10 +322,18 @@ class RandomWalk(GSObject):
 
 
             self._points=points
+            self._npoints=self._points.shape[0]
         else:
-            self._points=self._generate_points(npoints)
+            try:
+                npoints = int(npoints)
+            except ValueError as err:
+                raise GalSimValueError("npoints should be a number: %s", str(err))
 
-        self._npoints=self._points.shape[0]
+            if npoints <= 0:
+                raise GalSimRangeError("npoints must be > 0", npoints, 1)
+
+            self._npoints=npoints
+
 
     def _generate_points(self, npoints):
         """
@@ -317,13 +341,6 @@ class RandomWalk(GSObject):
         this profile to be used in the configuration file context.
         """
 
-        try:
-            npoints = int(npoints)
-        except ValueError as err:
-            raise GalSimValueError("npoints should be a number: %s", str(err))
-
-        if npoints <= 0:
-            raise GalSimRangeError("npoints must be > 0", npoints, 1)
 
         ud = UniformDeviate(self._rng)
         photons = self._profile.shoot(npoints, ud)
@@ -348,12 +365,14 @@ class RandomWalk(GSObject):
 
     def __str__(self):
         rep='galsim.RandomWalk(%(npoints)d, profile=%(profile)s, gsparams=%(gsparams)s,rng=%(rng)s, points=%(points)s)'
+
+        points=self._get_points()
         rep = rep % dict(
             npoints=self._npoints,
             profile=repr(self._profile),
             gsparams=repr(self.gsparams),
             rng=repr(self._rng),
-            points=str(self._points[0:1]).replace(']]','],...]'),
+            points=str(points[0:1]).replace(']]','],...]'),
         )
 
         return rep
@@ -361,7 +380,8 @@ class RandomWalk(GSObject):
     def __repr__(self):
         rep='galsim.RandomWalk(%(npoints)d, profile=%(profile)s, gsparams=%(gsparams)s,rng=%(rng)s, points=%(points)s)'
 
-        prepr=repr(self._points).replace('array(','').replace(')','')
+        points=self._get_points()
+        prepr=repr(points).replace('array(','').replace(')','')
         rep = rep % dict(
             npoints=self._npoints,
             profile=repr(self._profile),
@@ -379,7 +399,7 @@ class RandomWalk(GSObject):
             self._half_light_radius == other._half_light_radius and
             self._flux == other._flux and
             self.gsparams == other.gsparams and
-            np.allclose(self._points, other._points)
+            np.allclose(self._get_points(), other._get_points())
         )
 
     def __hash__(self):

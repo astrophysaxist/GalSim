@@ -260,6 +260,9 @@ class RandomWalk(GSObject):
 
     @property
     def npoints(self):
+        """
+        get the number of points
+        """
         return self._npoints
 
     def calculateHLR(self):
@@ -455,3 +458,138 @@ class RandomWalk(GSObject):
     @doc_inherit
     def _drawKImage(self, image):
         self._sbp.drawK(image._image, image.scale)
+
+
+    """
+    these methods over-ride the usual GSObject methods.
+
+    Because point sources are being used, it is more efficient to generate a
+    new set of points drawn from the transformed profile.
+    """
+
+    def shear(self, *args, **kwargs):
+        """
+        Special method override for RandomWalk objects.  Because point sources
+        are being used, it is more efficient to generate a new set of points
+        drawn from the transformed profile.
+        """
+        return RandomWalk(
+            npoints=self.npoints,
+            profile=self._profile.shear(*args, **kwargs),
+        )
+
+    def shift(self, *args, **kwargs):
+        """
+        Special method override for RandomWalk objects.  Because point sources
+        are being used, it is more efficient to generate a new set of points
+        drawn from the transformed profile.
+        """
+        return RandomWalk(
+            npoints=self.npoints,
+            profile=self._profile.shift(*args, **kwargs),
+        )
+
+
+    def dilate(self, *args):
+        """
+        Special method override for RandomWalk objects.  Because point sources
+        are being used, it is more efficient to generate a new set of points
+        drawn from the transformed profile.
+        """
+        return RandomWalk(
+            npoints=self.npoints,
+            profile=self._profile.dilate(*args)
+        )
+
+    def magnify(self, *args):
+        """
+        Special method override for RandomWalk objects.  Because point sources
+        are being used, it is more efficient to generate a new set of points
+        drawn from the transformed profile.
+        """
+        return RandomWalk(
+            npoints=self.npoints,
+            profile=self._profile.magnify(*args)
+        )
+
+
+    def expand(self, *args):
+        """
+        Special method override for RandomWalk objects.  Because point sources
+        are being used, it is more efficient to generate a new set of points
+        drawn from the transformed profile.
+        """
+        return RandomWalk(
+            npoints=self.npoints,
+            profile=self._profile.expand(*args)
+        )
+
+    def lens(self, *args):
+        """
+        Special method override for RandomWalk objects.  Because point sources
+        are being used, it is more efficient to generate a new set of points
+        drawn from the transformed profile.
+        """
+        return RandomWalk(
+            npoints=self.npoints,
+            profile=self._profile.lens(*args)
+        )
+
+    def rotate(self, *args):
+        """
+        Special method override for RandomWalk objects.  Because point sources
+        are being used, it is more efficient to generate a new set of points
+        drawn from the transformed profile.
+        """
+        return RandomWalk(
+            npoints=self.npoints,
+            profile=self._profile.rotate(*args)
+        )
+
+    def transform(self, *args):
+        """
+        Special method override for RandomWalk objects.  Because point sources
+        are being used, it is more efficient to generate a new set of points
+        drawn from the transformed profile.
+        """
+        return RandomWalk(
+            npoints=self.npoints,
+            profile=self._profile.transform(*args)
+        )
+
+    def withFlux(self, *args):
+        """
+        Special method override for RandomWalk objects.  Because point sources
+        are being used, it is more efficient to generate a new set of points
+        drawn from the transformed profile.
+        """
+        return RandomWalk(
+            npoints=self.npoints,
+            profile=self._profile.withFlux(*args)
+        )
+
+    def withScaledFlux(self, *args):
+        """
+        Special method override for RandomWalk objects.  Because point sources
+        are being used, it is more efficient to generate a new set of points
+        drawn from the transformed profile.
+        """
+        return RandomWalk(
+            npoints=self.npoints,
+            profile=self._profile.withScaledFlux(*args)
+        )
+
+
+    '''
+    def withGSParams(self, *args):
+        """
+        Special method override for RandomWalk objects.  Because point sources
+        are being used, it is more efficient to generate a new set of points
+        drawn from the transformed profile.
+        """
+        return RandomWalk(
+            npoints=self.npoints,
+            profile=self._profile.withGSParams(*args)
+        )
+    '''
+

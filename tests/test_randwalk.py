@@ -140,6 +140,18 @@ def test_randwalk_valid_inputs():
     assert rw.npoints==np
     assert rw.points.shape[0]==np
 
+    # make sure the over-ridden transformations are covered
+    trw=rw.shear(g1=0.1, g2=-0.05)
+    trw=rw.shift(dx=0.1, dy=-0.5)
+    trw=rw.dilate(1.1)
+    trw=rw.magnify(1.1)
+    trw=rw.expand(1.1)
+    trw=rw.lens(0.05,-0.01,1.1)
+    trw=rw.rotate(0.05*galsim.degrees)
+    trw=rw.transform(0.5, 0.01, -0.01, 0.45)
+    trw=rw.withFlux(2.0)
+    trw=rw.withScaledFlux(1.1)
+
 @timer
 def test_randwalk_invalid_inputs():
     """

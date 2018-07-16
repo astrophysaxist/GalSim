@@ -72,6 +72,11 @@ class RandomWalk(GSObject):
                                     If a profile is sent, the half_light_radius
                                     and flux keywords are ignored.
                                     [default: None]
+    @param  points                  The points to use.  In this case, the
+                                    input half_light_radius and the profile
+                                    is not used to generate points, but
+                                    one of those must still be sent to create
+                                    a consistent RandomWalk object.
     @param  rng                     Optional random number generator. Can be
                                     any galsim.BaseDeviate.  If None, the rng
                                     is created internally.
@@ -87,6 +92,8 @@ class RandomWalk(GSObject):
 
         calculateHLR:
             Calculate the actual half light radius of the generated points
+        set_points:
+            Set the points used. This over-rides any existing points.
 
     There are also "getters",  implemented as read-only properties
 
@@ -95,6 +102,9 @@ class RandomWalk(GSObject):
         .flux
         .points
             The array of x,y offsets used to create the point sources
+
+    And setters
+        .points: calls set_points
 
     Notes
     -----
@@ -109,8 +119,9 @@ class RandomWalk(GSObject):
     """
     # these allow use in a galsim configuration context
 
-    _req_params = { "npoints" : int }
+    #_req_params = { "npoints" : int }
     _opt_params = {
+        "npoints" : int,
         "flux" : float ,
         "half_light_radius": float,
         "profile": GSObject,
@@ -123,19 +134,20 @@ class RandomWalk(GSObject):
     _is_analytic_x = False
     _is_analytic_k = True
 
-    def __init__(self, npoints, **kw):
+    def __init__(self, npoints=None, **kw):
         from .random import BaseDeviate
 
-        self._npoints=npoints
         rng=kw.pop('rng',None)
+        self._set_rng(rng)
+
         gsparams=kw.pop('gsparams',None)
+        self._gsparams = GSParams.check(gsparams)
+
         profile=kw.pop('profile',None)
 
-        if rng is None:
-            rng = BaseDeviate()
-        self._rng=rng
-
-        self._verify()
+        # the user can bypass all other mechanisms and just
+        # set the points directly
+        input_points=kw.pop('points',None)
 
         if profile is None:
 
@@ -190,18 +202,21 @@ class RandomWalk(GSObject):
 
         self._profile=profile
 
-        self._gsparams = GSParams.check(gsparams)
+        self.set_points(points=input_points, npoints=npoints)
 
-        #self._points = self._get_points()
+    @property
+    def points(self):
+        """
+        get a copy of the points
+        """
+        return self._points
 
-    @lazy_property
-    def _points(self):
+    @points.setter
+    def points(self, points):
         """
-        lazy evaluation of the points.  This is useful because
-        the object may undergo various transformations and
-        we don't want to re-generate the points every time
+        set the points. See the set_points() method for documentation
         """
-        return self._get_points()
+        return self.set_points(points=points)
 
     @lazy_property
     def _sbp(self):
@@ -235,10 +250,6 @@ class RandomWalk(GSObject):
     def npoints(self):
         return self._npoints
 
-    @property
-    def points(self):
-        return self._points
-
     def calculateHLR(self):
         """
         calculate the half-light radius of the generated points
@@ -265,66 +276,121 @@ class RandomWalk(GSObject):
         self._sigma_step = self._half_light_radius/2.3548200450309493*2
         self._gauss_rng = GaussianDeviate(self._rng, sigma=self._sigma_step)
 
-    def _get_points(self):
+    def set_points(self, points=None, npoints=None):
+        """
+        set the points, either using the input points or
+        generating the number of specified points npoints
+
+        points
+        ------
+        array: optional
+            (npoints, 2) array.
+        npoints: number optional
+            number of new points to generate. Existing points
+            will be replaced
+        """
+
+        if npoints is None and points is None:
+            raise GalSimIncompatibleValuesError(
+                "send either points= or npoints="
+            )
+
+        if points is not None:
+            points = np.array(points, dtype='f8', copy=False)
+
+            if len(points.shape) != 2:
+                raise GalSimIncompatibleValuesError(
+                    "input points should be an array-like with shape (npoints,2)"
+                    "got shape %s" % str(points.shape)
+                )
+
+
+            self._points=points
+        else:
+            self._points=self._generate_points(npoints)
+
+        self._npoints=self._points.shape[0]
+
+    def _generate_points(self, npoints):
         """
         We must use a galsim random number generator, in order for
         this profile to be used in the configuration file context.
         """
+
+        try:
+            npoints = int(npoints)
+        except ValueError as err:
+            raise GalSimValueError("npoints should be a number: %s", str(err))
+
+        if npoints <= 0:
+            raise GalSimRangeError("npoints must be > 0", npoints, 1)
+
         ud = UniformDeviate(self._rng)
-        photons = self._profile.shoot(self._npoints, ud)
-        ar = np.column_stack([ photons.x, photons.y ])
+        photons = self._profile.shoot(npoints, ud)
+        points = np.column_stack([ photons.x, photons.y ])
 
-        return ar
+        return points
 
-    def _verify(self):
+    def _set_rng(self, rng):
         """
         type and range checking on the inputs
         """
         from .random import BaseDeviate
 
+        self._rng=rng
+
+        if self._rng is None:
+            self._rng = BaseDeviate()
+
         if not isinstance(self._rng, BaseDeviate):
-            raise TypeError("rng must be an instance of galsim.BaseDeviate, got %s"%self._rng)
-
-        try:
-            self._npoints = int(self._npoints)
-        except ValueError as err:
-            raise GalSimValueError("npoints should be a number: %s", str(err))
-
-        if self._npoints <= 0:
-            raise GalSimRangeError("npoints must be > 0", self._npoints, 1)
+            raise TypeError("rng must be an instance of "
+                            "galsim.BaseDeviate, got %s"%self._rng)
 
     def __str__(self):
-        rep='galsim.RandomWalk(%(npoints)d, profile=%(profile)s, gsparams=%(gsparams)s,rng=%(rng)s)'
+        rep='galsim.RandomWalk(%(npoints)d, profile=%(profile)s, gsparams=%(gsparams)s,rng=%(rng)s, points=%(points)s)'
         rep = rep % dict(
             npoints=self._npoints,
             profile=repr(self._profile),
             gsparams=repr(self.gsparams),
             rng=repr(self._rng),
+            points=str(self._points[0:1]).replace(']]','],...]'),
         )
 
         return rep
 
     def __repr__(self):
-        rep='galsim.RandomWalk(%(npoints)d, profile=%(profile)s, gsparams=%(gsparams)s,rng=%(rng)s)'
+        rep='galsim.RandomWalk(%(npoints)d, profile=%(profile)s, gsparams=%(gsparams)s,rng=%(rng)s, points=%(points)s)'
+
+        prepr=repr(self._points).replace('array(','').replace(')','')
         rep = rep % dict(
             npoints=self._npoints,
             profile=repr(self._profile),
             gsparams=repr(self.gsparams),
             rng=repr(self._rng),
+            points=prepr,
         )
 
         return rep
 
     def __eq__(self, other):
-        return (isinstance(other, RandomWalk) and
-                self._npoints == other._npoints and
-                self._half_light_radius == other._half_light_radius and
-                self._flux == other._flux and
-                self.gsparams == other.gsparams)
+        return (
+            isinstance(other, RandomWalk) and
+            self._npoints == other._npoints and
+            self._half_light_radius == other._half_light_radius and
+            self._flux == other._flux and
+            self.gsparams == other.gsparams and
+            np.allclose(self._points, other._points)
+        )
 
     def __hash__(self):
-        return hash(("galsim.RandomWalk", self._npoints, self._half_light_radius, self._flux,
-                     self.gsparams))
+        vals=(
+            "galsim.RandomWalk",
+            self._npoints,
+            self._half_light_radius,
+            self._flux,
+            self.gsparams,
+        )
+        return hash(vals)
 
     def __getstate__(self):
         d = self.__dict__.copy()

@@ -192,7 +192,16 @@ class RandomWalk(GSObject):
 
         self._gsparams = GSParams.check(gsparams)
 
-        self._points = self._get_points()
+        #self._points = self._get_points()
+
+    @lazy_property
+    def _points(self):
+        """
+        lazy evaluation of the points.  This is useful because
+        the object may undergo various transformations and
+        we don't want to re-generate the points every time
+        """
+        return self._get_points()
 
     @lazy_property
     def _sbp(self):
@@ -260,8 +269,6 @@ class RandomWalk(GSObject):
         """
         We must use a galsim random number generator, in order for
         this profile to be used in the configuration file context.
-
-        The most efficient way is to write into an image
         """
         ud = UniformDeviate(self._rng)
         photons = self._profile.shoot(self._npoints, ud)
@@ -287,21 +294,23 @@ class RandomWalk(GSObject):
             raise GalSimRangeError("npoints must be > 0", self._npoints, 1)
 
     def __str__(self):
-        rep='galsim.RandomWalk(%(npoints)d, profile=%(profile)s, gsparams=%(gsparams)s)'
+        rep='galsim.RandomWalk(%(npoints)d, profile=%(profile)s, gsparams=%(gsparams)s,rng=%(rng)s)'
         rep = rep % dict(
             npoints=self._npoints,
             profile=repr(self._profile),
             gsparams=repr(self.gsparams),
+            rng=repr(self._rng),
         )
 
         return rep
 
     def __repr__(self):
-        rep='galsim.RandomWalk(%(npoints)d, profile=%(profile)s, gsparams=%(gsparams)s)'
+        rep='galsim.RandomWalk(%(npoints)d, profile=%(profile)s, gsparams=%(gsparams)s,rng=%(rng)s)'
         rep = rep % dict(
             npoints=self._npoints,
             profile=repr(self._profile),
             gsparams=repr(self.gsparams),
+            rng=repr(self._rng),
         )
 
         return rep

@@ -56,7 +56,7 @@ def test_randwalk_defaults():
     np.testing.assert_almost_equal(rw.centroid.y, np.mean(pts[:,1]))
 
     gsp = galsim.GSParams(xvalue_accuracy=1.e-8, kvalue_accuracy=1.e-8)
-    rw2 = galsim.RandomWalk(npoints, half_light_radius=hlr, rng=rng, gsparams=gsp)
+    rw2 = galsim.RandomWalk(points=rw.points, half_light_radius=hlr, rng=rng, gsparams=gsp)
     assert rw2 != rw
     assert rw2 == rw.withGSParams(gsp)
 
@@ -118,6 +118,18 @@ def test_randwalk_valid_inputs():
         pts=rw.points
         assert pts.shape == (npoints,2),"expected (%d,2) shape for points, got %s" % (npoints, pts.shape)
 
+    # over-ride existing point
+    points = [
+        [1.5, -1.3],
+        [2.5, 7.6],
+    ]
+    rw=galsim.RandomWalk(npoints=10, half_light_radius=1)
+    rw.set_points(points)
+
+    rw=galsim.RandomWalk(npoints=10, half_light_radius=1)
+    rw.points=points
+
+
 @timer
 def test_randwalk_invalid_inputs():
     """
@@ -145,10 +157,21 @@ def test_randwalk_invalid_inputs():
     with assert_raises(GalSimIncompatibleValuesError):
         galsim.RandomWalk(npoints, profile=3.5)
 
+    # not sending points or npoints
+    with assert_raises(GalSimIncompatibleValuesError):
+        galsim.RandomWalk(half_light_radius=hlr)
+
     # wrong type for npoints
-    npoints_bad=[35]
-    with assert_raises(TypeError):
-        galsim.RandomWalk(npoints_bad, half_light_radius=hlr)
+    npoints_bad=[ [35],None]
+    for npb in npoints_bad:
+        with assert_raises(TypeError):
+            galsim.RandomWalk(npb, half_light_radius=hlr)
+
+    # wrong type for points
+    points_bad=[ 8, [35,66,77], None ]
+    for pb in points_bad:
+        with assert_raises(GalSimIncompatibleValuesError):
+            galsim.RandomWalk(points=pb, half_light_radius=hlr)
 
     # wrong type for hlr
     with assert_raises(GalSimRangeError):

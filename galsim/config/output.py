@@ -248,6 +248,8 @@ def BuildFile(config, file_num=0, image_num=0, obj_num=0, logger=None):
     RetryIO(builder.writeFile, args, ntries, file_name, logger)
     logger.debug('file %d: Wrote %s to file %r',file_num,output_type,file_name)
 
+    builder.writeExtraOutputs(config, data, logger)
+
     t2 = time.time()
 
     return file_name, t2-t1

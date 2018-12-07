@@ -206,7 +206,6 @@ def WriteExtraOutputs(config, main_data, logger=None):
     if 'extra_last_file' not in config:
         config['extra_last_file'] = {}
 
-    extra_files = {}
     for key in (k for k in valid_extra_outputs.keys() if k in output):
         field = output[key]
         if 'file_name' in field:
@@ -248,16 +247,6 @@ def WriteExtraOutputs(config, main_data, logger=None):
         galsim.config.RetryIO(write_func, args, ntries, file_name, logger)
         config['extra_last_file'][key] = file_name
         logger.debug('file %d: Wrote %s to %r',config['file_num'],key,file_name)
-
-        #Add the file_name to the extra_file_dict
-        extra_files[key] = file_name
-
-    #Add extra_files to config
-    #try:
-    #    config["output"]["_file_names"][config["file_num"]]["extra"].update(extra_files)
-    #except KeyError:
-    #    config["output"]["_file_names"][config["file_num"]]["extra"] = extra_files
-
 
 def AddExtraOutputHDUs(config, main_data, logger=None):
     """Write the extra output objects to either HDUS or images as appropriate and add them

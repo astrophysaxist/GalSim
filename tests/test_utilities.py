@@ -1054,8 +1054,9 @@ def test_nCr():
     for n in range(300):
         assert sum([galsim.utilities.nCr(n, r) for r in range(n+1)]) == 2**n
 
+@timer
 def test_LinkedList():
-    a = LinkedList([1,2,3])
+    a = galsim.utilities.LinkedList([1,2,3])
     assert len(a) == 3
     a.addNode(0)
     assert len(a) == 4

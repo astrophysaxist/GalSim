@@ -203,6 +203,8 @@ class GSParams(object):
         """
         if len(gsp_list) == 1:
             return gsp_list[0]
+        elif all(g == gsp_list[0] for g in gsp_list[1:]):
+            return gsp_list[0]
         else:
             return GSParams(
                 max([g.minimum_fft_size for g in gsp_list]),
@@ -236,7 +238,8 @@ class GSParams(object):
                 self._getinitargs()
 
     def __eq__(self, other):
-        return isinstance(other, GSParams) and self._getinitargs() == other._getinitargs()
+        return (self is other or
+                (isinstance(other, GSParams) and self._getinitargs() == other._getinitargs()))
     def __ne__(self, other):
         return not self.__eq__(other)
 

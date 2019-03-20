@@ -29,6 +29,8 @@
 #include "TMV_SymBand.h"
 #endif
 
+#include "fmath/fmath.hpp"  // For SSE
+
 #include "Table.h"
 #include "Interpolant.h"
 
@@ -89,11 +91,8 @@ namespace galsim {
             xdbg<<"da = "<<_da<<std::endl;
             int i = int( std::ceil( (a-front()) / _da) );
             xdbg<<"i = "<<i<<std::endl;
-            if (i >= _n) --i; // in case of rounding error
-            if (i == 0) ++i;
-            // check if we need to move ahead or back one step due to rounding errors
-            while (a > _vec[i]) ++i;
-            while (a < _vec[i-1]) --i;
+            if (i >= _n) i = _n-1; // in case of rounding error or off the edge
+            if (i <= 0) i = 1;
             xdbg<<"i => "<<i<<std::endl;
             return i;
         } else {
@@ -141,26 +140,18 @@ namespace galsim {
         }
     }
 
-    void ArgVec::upperIndexMany(const double* a, int* indices, int N) const {
+    void ArgVec::upperIndexMany(const double* a, int* indices, int N) const
+    {
+        xdbg<<"Start upperIndexMany\n";
         if (_equalSpaced) {
             xdbg << "Equal spaced\n";
             xdbg << "da = "<<_da<<'\n';
             for (int k=0; k<N; k++) {
-                if (a[k] < front()) {
-                    indices[k] = 1;
-                    continue;
-                }
-                if (a[k] > back()) {
-                    indices[k] = _n-1;
-                    continue;
-                }
+                xdbg<<"a[k] = "<<a[k]<<std::endl;
                 int idx = int(std::ceil((a[k]-front()) / _da));
+                if (idx >= _n) idx = _n-1; // in case of rounding error or off the edge
+                if (idx <= 0) idx = 1;
                 xdbg << "idx = "<<idx<<'\n';
-                if (idx >= _n) --idx;
-                if (idx == 0) ++idx;
-                while (a[k] > _vec[idx]) ++idx;
-                while (a[k] < _vec[idx-1]) --idx;
-                xdbg << "idx => "<<idx<<'\n';
                 indices[k] = idx;
             }
         } else {
@@ -1024,4 +1015,40 @@ namespace galsim {
         _pimpl->gradientGrid(xvec, yvec, dfdxvec, dfdyvec, Nx, Ny);
     }
 
+    void WrapArrayToPeriod(double* x, int n, double x0, double period)
+    {
+#ifdef __SSE2__
+        for (; n && !IsAligned(x); --n, ++x)
+            *x -= period * floor((*x-x0)/period);
+
+        int n2 = n>>1;
+        int na = n2<<1;
+        n -= na;
+
+        if (n2) {
+            __m128d xx0 = _mm_set1_pd(x0);
+            __m128d xperiod = _mm_set1_pd(period);
+            __m128d xzero = _mm_set1_pd(0.);
+            __m128d* xx = reinterpret_cast<__m128d*>(x);
+            do {
+                __m128d xoffset = _mm_sub_pd(*xx, xx0);
+                __m128d nperiod = _mm_div_pd(xoffset,xperiod);
+                __m128d floornp = _mm_cvtepi32_pd(_mm_cvttpd_epi32(nperiod));
+                __m128d shift = _mm_mul_pd(xperiod, floornp);
+                __m128d neg = _mm_cmpge_pd(xoffset, xzero);
+                __m128d shift2 = _mm_sub_pd(shift, _mm_andnot_pd(neg, xperiod));
+                *xx = _mm_sub_pd(*xx, shift2);
+                ++xx;
+            } while (--n2);
+        }
+
+        if (n) {
+            x += na;
+            *x -= period * floor((*x-x0)/period);
+        }
+#else
+        for (; n; --n, ++x)
+            *x -= period * floor((*x-x0)/period);
+#endif
+    }
 }

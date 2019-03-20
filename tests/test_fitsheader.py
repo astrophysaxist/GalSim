@@ -123,6 +123,22 @@ def test_read():
     assert header.get('AIRMASS') == 2
     assert header != orig_header
 
+    # Pop does a similar thing:
+    assert header.pop('AIRMASS') == 2.0
+    assert 'AIRMASS' not in header
+
+    # Works if not preset, given default
+    assert header.pop('AIRMASS', 2.0) == 2.0
+    assert 'AIRMASS' not in header
+    header['AIRMASS'] = 2
+    assert header['AIRMASS'] == 2
+
+    # Get real value if preset and given default value
+    assert header.pop('AIRMASS', 1.9) == 2.0
+    assert 'AIRMASS' not in header
+    header['AIRMASS'] = 2
+    assert header['AIRMASS'] == 2
+
     # Overwrite an existing value
     header['AIRMASS'] = 1.7
     assert header.get('AIRMASS') == 1.7
@@ -138,8 +154,10 @@ def test_read():
     header.update(d)
     assert header.get('AIRMASS') == 1.185
     # We are essentially back to where we started, except the len won't be right.
-    # Deleting a key removed an item, but setting it overwrote a blank item.
-    # But if we add back another one of these, we should be back to the original values.
+    # Deleting a key removed an item each time, but setting it overwrote a blank item.
+    # But if we add back another few of these, we should be back to the original values.
+    header.append('','', useblanks=False)
+    header.append('','', useblanks=False)
     header.append('','', useblanks=False)
     check_tpv(header)
     do_pickle(header)
@@ -170,14 +188,7 @@ def test_scamp():
     do_pickle(header)
 
 
-@timer
-def test_dict():
-    """Test that we can create a FitsHeader from a dict
-    """
-    d = { 'TIME-OBS' : '04:28:14.105' ,
-          'FILTER'   : 'I',
-          'AIRMASS'  : 1.185 }
-
+def check_dict(d):
     def check_dict(header):
         """Check that the header object has correct values from the given dict
         """
@@ -220,8 +231,27 @@ def test_dict():
     check_dict(header)
     do_pickle(header)
 
+@timer
+def test_dict():
+    """Test that we can create a FitsHeader from a dict
+    """
+    d = { 'TIME-OBS' : '04:28:14.105' ,
+          'FILTER'   : 'I',
+          'AIRMASS'  : 1.185 }
+    check_dict(d)
+
+@timer
+def test_lowercase():
+    """Test that lowercase keys are turned into uppercase.
+    """
+    d = { 'Time-Obs' : '04:28:14.105' ,
+          'filter'   : 'I',
+          'AirMAsS'  : 1.185 }
+    check_dict(d)
+
 
 if __name__ == "__main__":
     test_read()
     test_scamp()
     test_dict()
+    test_lowercase()

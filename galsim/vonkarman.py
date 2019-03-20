@@ -28,6 +28,7 @@ from .utilities import lazy_property, doc_inherit
 from .position import PositionD
 from .angle import arcsec, AngleUnit
 from .errors import GalSimError, convert_cpp_errors, galsim_warn
+from .errors import GalSimIncompatibleValuesError
 
 
 class VonKarman(GSObject):
@@ -64,8 +65,11 @@ class VonKarman(GSObject):
     method='fft'.  If for some reason you want to keep the delta function, though, then you can pass
     the do_delta=True argument to the VonKarman initializer.
 
-    @param lam               Wavelength in nanometers
-    @param r0                Fried parameter in meters.
+    @param lam               Wavelength in nanometers.
+    @param r0                Fried parameter at specified wavelength `lam` in meters.  Exactly one
+                             of r0 and r0_500 should be specified.
+    @param r0_500            Fried parameter at 500 nm in meters.  Exactly one of r0 and r0_500
+                             should be specified.
     @param L0                Outer scale in meters.  [default: 25.0]
     @param flux              The flux (in photons/cm^2/s) of the profile. [default: 1]
     @param scale_unit        Units assumed when drawing this profile or evaluating xValue, kValue,
@@ -82,9 +86,9 @@ class VonKarman(GSObject):
     @param gsparams          An optional GSParams argument.  See the docstring for GSParams for
                              details. [default: None]
     """
-    _req_params = { "lam" : float, "r0" : float }
+    _req_params = { "lam" : float }
     _opt_params = { "L0" : float, "flux" : float, "scale_unit" : str, "do_delta" : bool }
-    _single_params = []
+    _single_params = [ { "r0" : float, "r0_500" : float } ]
     _takes_rng = False
 
     _has_hard_edges = False
@@ -92,13 +96,23 @@ class VonKarman(GSObject):
     #_is_analytic_x = True  # = not do_delta  defined below.
     _is_analytic_k = True
 
-    def __init__(self, lam, r0, L0=25.0, flux=1, scale_unit=arcsec,
+    def __init__(self, lam, r0=None, r0_500=None, L0=25.0, flux=1, scale_unit=arcsec,
                  do_delta=False, suppress_warning=False, gsparams=None):
-
         # We lose stability if L0 gets too large.  This should be close enough to infinity for
         # all practical purposes though.
         if L0 > 1e10:
             L0 = 1e10
+
+        if r0 is not None and r0_500 is not None:
+            raise GalSimIncompatibleValuesError(
+                "Only one of r0 and r0_500 may be specified",
+                r0=r0, r0_500=r0_500)
+        if r0 is None and r0_500 is None:
+            raise GalSimIncompatibleValuesError(
+                "Either r0 or r0_500 must be specified",
+                r0=r0, r0_500=r0_500)
+        if r0_500 is not None:
+            r0 = r0_500 * (lam/500.)**1.2
 
         if isinstance(scale_unit, str):
             self._scale_unit = AngleUnit.from_name(scale_unit)
@@ -154,6 +168,10 @@ class VonKarman(GSObject):
         return self._r0
 
     @property
+    def r0_500(self):
+        return self._r0*(self._lam/500.)**(-1.2)
+
+    @property
     def L0(self):
         return self._L0
 
@@ -182,14 +200,15 @@ class VonKarman(GSObject):
         return self._sbvk.structureFunction(rho)
 
     def __eq__(self, other):
-        return (isinstance(other, VonKarman) and
-        self.lam == other.lam and
-        self.r0 == other.r0 and
-        self.L0 == other.L0 and
-        self.flux == other.flux and
-        self.scale_unit == other.scale_unit and
-        self.do_delta == other.do_delta and
-        self.gsparams == other.gsparams)
+        return (self is other or
+                (isinstance(other, VonKarman) and
+                 self.lam == other.lam and
+                 self.r0 == other.r0 and
+                 self.L0 == other.L0 and
+                 self.flux == other.flux and
+                 self.scale_unit == other.scale_unit and
+                 self.do_delta == other.do_delta and
+                 self.gsparams == other.gsparams))
 
     def __hash__(self):
         return hash(("galsim.VonKarman", self.lam, self.r0, self.L0, self.flux, self.scale_unit,

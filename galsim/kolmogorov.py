@@ -92,7 +92,7 @@ class Kolmogorov(GSObject):
                             of `scale_unit`.
     @param r0_500           The Fried parameter in units of meters at 500 nm.  The Fried parameter
                             at the given wavelength, `lam`, will be computed using the standard
-                            ralation r0 = r0_500 * (lam/500)**1.2.
+                            relation r0 = r0_500 * (lam/500)**1.2.
     @param flux             The flux (in photons/cm^2/s) of the profile. [default: 1]
     @param scale_unit       Units to use for the sky coordinates when calculating lam/r0 if these
                             are supplied separately.  Note that the results of calling methods like
@@ -215,10 +215,11 @@ class Kolmogorov(GSObject):
         return self._lor0 * Kolmogorov._hlr_factor
 
     def __eq__(self, other):
-        return (isinstance(other, Kolmogorov) and
-                self.lam_over_r0 == other.lam_over_r0 and
-                self.flux == other.flux and
-                self.gsparams == other.gsparams)
+        return (self is other or
+                (isinstance(other, Kolmogorov) and
+                 self.lam_over_r0 == other.lam_over_r0 and
+                 self.flux == other.flux and
+                 self.gsparams == other.gsparams))
 
     def __hash__(self):
         return hash(("galsim.Kolmogorov", self.lam_over_r0, self.flux, self.gsparams))

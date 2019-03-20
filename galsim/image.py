@@ -568,7 +568,7 @@ class Image(object):
         buf = np.zeros(nbytes + 16, dtype=np.uint8)
         start_index = -buf.ctypes.data % 16
         a = buf[start_index:start_index + nbytes].view(dtype).reshape(shape)
-        assert a.ctypes.data % 16 == 0
+        #assert a.ctypes.data % 16 == 0
         return a
 
     def resize(self, bounds, wcs=None):
@@ -1462,7 +1462,7 @@ class Image(object):
     def calculateFWHM(self, center=None, Imax=0.):
         """Returns the full-width half-maximum (FWHM) of a drawn object.
 
-        This method is equivalent to GSObject.calculateMomentRadius when the object has already
+        This method is equivalent to GSObject.calculateFWHM when the object has already
         been drawn onto an image.  Note that the profile should be drawn using a method that
         does not integrate over pixels, so either 'sb' or 'no_pixel'.  Also, if there is a
         significant amount of noise in the image, this method may not work well.
@@ -1521,11 +1521,12 @@ class Image(object):
         # >>> assert galsim.ImageD(int_array) == galsim.ImageF(int_array) # passes
         # >>> assert galsim.ImageD(double_array) == galsim.ImageF(double_array) # fails
 
-        return (isinstance(other, Image) and
-                self.bounds == other.bounds and
-                self.wcs == other.wcs and
-                (not self.bounds.isDefined() or np.array_equal(self.array,other.array)) and
-                self.isconst == other.isconst)
+        return (self is other or
+                (isinstance(other, Image) and
+                 self.bounds == other.bounds and
+                 self.wcs == other.wcs and
+                 (not self.bounds.isDefined() or np.array_equal(self.array,other.array)) and
+                 self.isconst == other.isconst))
 
     def __ne__(self, other): return not self.__eq__(other)
 

@@ -17,17 +17,20 @@
 #
 
 from builtins import range, zip
+import sys
 import numpy as np
+import multiprocessing
 
 from .random import BaseDeviate, GaussianDeviate
 from .image import Image
 from .angle import radians
-from .table import LookupTable2D
+from .table import LookupTable2D, _LookupTable2D
 from . import utilities
 from . import fft
 from . import zernike
-from .utilities import LRU_Cache
-from .errors import GalSimRangeError, GalSimValueError, GalSimIncompatibleValuesError, galsim_warn
+from .utilities import LRU_Cache, lazy_property
+from .errors import (GalSimRangeError, GalSimValueError, GalSimIncompatibleValuesError, galsim_warn,
+    GalSimNotImplementedError)
 
 
 # Two helper functions to cache the calculation required for _getStepK
@@ -46,11 +49,38 @@ def __calcOptStepK(lam, diam, obscuration, gsparams):
 _calcOptStepK = LRU_Cache(__calcOptStepK)
 
 
+# Global dict of "pointers" (roughly) to shared memory.
+_GSScreenShare = {}
+
+
+def initWorkerArgs():
+    """Function used to generate worker arguments to pass to multiprocessing.Pool initializer.
+
+    See AtmosphericScreen docstring for more information.
+    """
+    for v in _GSScreenShare.values():
+        if v['alpha'].value != 1.0:
+            raise GalSimNotImplementedError(
+                "Shared memory use is only supported for frozen-flow screens")
+    return (_GSScreenShare,)
+
+
+def initWorker(share):
+    """Worker initialization function to pass to multiprocessing.Pool initializer.
+
+    See AtmosphericScreen docstring for more information.
+    """
+    _GSScreenShare.update(share)  # pragma: no cover  (covered, but in a fork)
+
+
 class AtmosphericScreen(object):
     """ An atmospheric phase screen that can drift in the wind and evolves ("boils") over time.  The
     initial phases and fractional phase updates are drawn from a von Karman power spectrum, which is
     defined by a Fried parameter that effectively sets the amplitude of the turbulence, and an outer
     scale beyond which the turbulence power flattens.
+
+    Instantiation
+    -------------
 
     AtmosphericScreen delays the actual instantiation of the phase screen array in memory until it
     is used for either drawing a PSF or querying the wavefront or wavefront gradient.  This is to
@@ -73,6 +103,73 @@ class AtmosphericScreen(object):
 
     Note that once a screen has been instantiated with a particular set of truncation parameters, it
     cannot be re-instantiated with another set of parameters.
+
+    Shared memory
+    -------------
+
+    Instantiated AtmosphericScreen objects can consume a significant amount of memory.  For example,
+    an atmosphere with 6 screens, each extending 819.2 m and with resolution of 10 cm will consume
+    3 GB of memory.  In contexts where both a realistic atmospheric PSF and high throughput via
+    multiprocessing are required, allocating this 3 GB of memory once in a shared memory space
+    accessible to each subprocess (as opposed to once per subprocess) is highly desireable.  We
+    provide a few functions here to enable such usage:
+
+        - The mp_context keyword argument to AtmosphericScreen.
+            This is used to indicate which multiprocessing process launching context will be used.
+            This is important for setting up the shared memory correctly.
+        - The galsim.phase_screens.initWorker() and initWorkerArgs() functions.
+            These should be used in a call to multiprocessing.Pool to correctly inform the worker
+            process where to find AtmosphericScreen shared memory.
+
+    A template example might look something like:
+
+        ```
+        import galsim
+        import multiprocessing as mp
+
+        def work(i, atm):
+            args, moreArgs = fn(i)
+            psf = atm.makePSF(*args)
+            return psf.drawImage(*moreArgs)
+
+        ctx = mp.get_context("spawn")  # "spawn" is generally the safest context available
+
+        atm = galsim.Atmosphere(..., mp_context=ctx)  # internally calls AtmosphericScreen ctor
+        nProc = 4  # Note, can set this to None to get a good default
+        with ctx.Pool(
+            nProc,
+            initializer=galsim.phase_screens.initWorker,
+            initargs=galsim.phase_screens.initWorkerArgs()
+        ) as pool:
+            results = []
+            # First submit
+            for i in range(10):
+                results.append(pool.apply_async(work, (i, atm)))
+            # Then wait to finish
+            for r in results:
+                r.wait()
+        # Turn future objects into actual returned images.
+        results = [r.get() for r in results]
+        ```
+
+    It is also possible to manually instantiate each of the AtmosphericScreen objects in a
+    PhaseScreenList in parallel using a process pool.  This requires knowing what k-scale to
+    truncate the screen at:
+
+        ```
+        atm = galsim.Atmosphere(..., mp_context=ctx)
+        with ctx.Pool(
+            nProc,
+            initializer=galsim.phase_screens.initWorker,
+            initargs=galsim.phase_screens.initWorkerArgs()
+        ) as pool:
+            dummyPSF = atm.makePSF(...)
+            kmax = dummyPSF.screen_kmax
+            atm.instantiate(pool=pool, kmax=kmax)
+        ```
+
+    Finally, the above multiprocessing shared memory tricks are only currently supported for
+    non-time-evolving screens (alpha=1).
 
     @param screen_size   Physical extent of square phase screen in meters.  This should be large
                          enough to accommodate the desired field-of-view of the telescope as well as
@@ -110,6 +207,10 @@ class AtmosphericScreen(object):
     @param rng           Random number generator as a galsim.BaseDeviate().  If None, then use the
                          clock time or system entropy to seed a new generator.  [default: None]
     @param suppress_warning   Turn off instantiation sanity checking.  (See above)  [default: False]
+    @param mp_context    GalSim uses shared memory for phase screen allocation to better enable
+                         multiprocessing.  Use this keyword to set the launch context for
+                         multiprocessing.  Usually it will be sufficient to leave this at its
+                         default.  [default: None]
 
     Relevant SPIE paper:
     "Remembrance of phases past: An autoregressive method for generating realistic atmospheres in
@@ -121,8 +222,10 @@ class AtmosphericScreen(object):
     September 2014
     """
     def __init__(self, screen_size, screen_scale=None, altitude=0.0, r0_500=0.2, L0=25.0,
-                 vx=0.0, vy=0.0, alpha=1.0, time_step=None, rng=None, suppress_warning=False):
-
+                 vx=0.0, vy=0.0, alpha=1.0, time_step=None, rng=None, suppress_warning=False,
+                 mp_context=None):
+        if mp_context is not None:
+            assert sys.version_info >= (3,4), "Use of mp_context requires Python version >= 3.4"
         if (alpha != 1.0 and time_step is None):
             raise GalSimIncompatibleValuesError(
                 "No time_step provided when alpha != 1.0", alpha=alpha, time_step=time_step)
@@ -131,6 +234,9 @@ class AtmosphericScreen(object):
                 "Setting AtmosphericScreen time_step prohibited when alpha == 1.0.  "
                 "Did you mean to set time_step in makePSF or PhaseScreenPSF?",
                 alpha=alpha, time_step=time_step)
+        if (alpha != 1.0 and mp_context is not None):
+            raise GalSimNotImplementedError(
+                "Shared memory use is only supported for frozen-flow screens")
         if screen_scale is None:
             # We copy Jee+Tyson(2011) and (arbitrarily) set the screen scale equal to r0 by default.
             screen_scale = r0_500
@@ -156,13 +262,72 @@ class AtmosphericScreen(object):
         self.dynamic = True
         self.reversible = self.alpha == 1.0
 
-        # These will be None until screens are instantiated.
-        self.kmin = None
-        self.kmax = None
+        # Use shared memory for screens.  Allocate it here; fill it in on demand.
+        # Shared memory implementation depends on python version.
+        if sys.version_info >= (3,4):
+            if isinstance(mp_context, multiprocessing.context.BaseContext):
+                ctx = mp_context
+            else:
+                ctx = multiprocessing.get_context(mp_context)
+            RawArray = ctx.RawArray
+            RawValue = ctx.RawValue
+            Lock = ctx.Lock
+        else:
+            from multiprocessing.sharedctypes import RawArray, RawValue
+            from multiprocessing import Lock
+        global _GSScreenShare
+        self._objDict = {
+            'f':RawArray('d', (self.npix+1)*(self.npix+1)),
+            'x':RawArray('d', self.npix+1),
+            'y':RawArray('d', self.npix+1),
+            'alpha':RawValue('d', alpha),
+            'kmin':RawValue('d', -1.0),
+            'kmax':RawValue('d', -1.0),
+            'x0':RawValue('d', 0.0),
+            'y0':RawValue('d', 0.0),
+            'xperiod':RawValue('d', 0.0),
+            'yperiod':RawValue('d', 0.0),
+            'instantiated':RawValue('b', False),
+            'refcount':RawValue('i', 1),
+            'lock':Lock()
+        }
+        # A unique id for this screen, created in the parent process, that can be used to find the
+        # correct shared memory object in child processes.
+        self._shareKey = id(self)
+        _GSScreenShare[self._shareKey] = self._objDict
+
+    def __setstate__(self, d):
+        self.__dict__.update(d)
+        self._objDict = _GSScreenShare[self._shareKey]
+        with self._objDict['lock']:
+            self._objDict['refcount'].value += 1
+
+    def __getstate__(self):
+        d = self.__dict__.copy()
+        d.pop('_objDict')
+        return d
+
+    def __del__(self):
+        if not hasattr(self, '_objDict'):  # for if __init__ raised exception
+            return
+
+        with self._objDict['lock']:
+            self._objDict['refcount'].value -= 1
+        with self._objDict['lock']:
+            if self._objDict['refcount'].value == 0:
+                del _GSScreenShare[self._shareKey]
 
     @property
     def altitude(self):
         return self._altitude / 1000.  # convert back to km
+
+    @lazy_property
+    def _xs(self):
+        return np.linspace(-0.5, 0.5, self.npix, endpoint=False)*self.screen_size
+
+    @lazy_property
+    def _ys(self):
+        return self._xs
 
     def __str__(self):
         return "galsim.AtmosphericScreen(altitude=%s)" % self.altitude
@@ -226,14 +391,20 @@ class AtmosphericScreen(object):
                       If `None`, then don't perform a check.  Also, don't perform a check if
                       self.suppress_warning is True.
         """
-        if self.kmax is None:
-            self.kmin = kmin
-            self.kmax = kmax
-            self._init_psi()
-            self._reset()
-            # Free some RAM for frozen-flow screens.
-            if self.reversible:
-                del self._psi, self._screen
+        if not self._objDict['instantiated'].value:
+            with self._objDict['lock']:
+                # Check that another process didn't finish instantiating
+                # while this process was waiting for the lock
+                # Since this is a race, both branches are only covered probabilistically
+                if not self._objDict['instantiated'].value:  # pragma: no branch
+                    self._objDict['kmin'].value = kmin
+                    self._objDict['kmax'].value = kmax
+                    self._init_psi()
+                    self._reset()
+                    if self.reversible:
+                        del self._psi, self._screen
+                    self._objDict['instantiated'].value = True
+
         if check is not None and not self._suppress_warning:
             if check == 'FFT':
                 if self.kmax != np.inf:
@@ -244,6 +415,13 @@ class AtmosphericScreen(object):
                     galsim_warn("AtmosphericScreen was instantiated for FFT drawing. "
                                 "Drawing now with photon shooting may yield surprising results.")
 
+    @property
+    def kmin(self):
+        return self._objDict['kmin'].value
+
+    @property
+    def kmax(self):
+        return self._objDict['kmax'].value
 
     # Note the magic number 0.00058 is actually ... wait for it ...
     # (5 * (24/5 * gamma(6/5))**(5/6) * gamma(11/6)) / (6 * pi**(8/3) * gamma(1/6)) / (2 pi)**2
@@ -284,6 +462,36 @@ class AtmosphericScreen(object):
         noise = utilities.rand_arr(self._psi.shape, gd)
         return fft.ifft2(fft.fft2(noise)*self._psi).real
 
+    def _setShare(self):
+        tab2d = LookupTable2D(self._xs, self._ys, self._screen, edge_mode='wrap')
+
+        xshare = np.frombuffer(self._objDict['x'], dtype=np.float64)
+        yshare = np.frombuffer(self._objDict['y'], dtype=np.float64)
+        fshare = np.frombuffer(self._objDict['f'], dtype=np.float64)
+        fshare = fshare.reshape((self.npix+1, self.npix+1))
+        xshare[:] = tab2d.x
+        yshare[:] = tab2d.y
+        fshare[:] = tab2d.f
+        self._objDict['x0'].value = tab2d.x0
+        self._objDict['y0'].value = tab2d.y0
+        self._objDict['xperiod'].value = tab2d.xperiod
+        self._objDict['yperiod'].value = tab2d.yperiod
+        self.__dict__.pop('_tab2d', None)
+
+    @lazy_property
+    def _tab2d(self):
+        # If _tab2d hasn't been overwritten in this process, but it's use is requested, then
+        # set it up from shared memory.
+        xshare = np.frombuffer(self._objDict['x'], dtype=np.float64)
+        yshare = np.frombuffer(self._objDict['y'], dtype=np.float64)
+        fshare = np.frombuffer(self._objDict['f'], dtype=np.float64)
+        fshare = fshare.reshape((self.npix+1, self.npix+1))
+        return _LookupTable2D(
+            xshare, yshare, fshare, 'linear', 'wrap', 0.0,
+            x0=self._objDict['x0'].value, y0=self._objDict['y0'].value,
+            xperiod=self._objDict['xperiod'].value, yperiod=self._objDict['yperiod'].value
+        )
+
     def _seek(self, t):
         """Set layer's internal clock to time t."""
         if t == self._time:
@@ -302,7 +510,9 @@ class AtmosphericScreen(object):
                 for _ in range(n_updates):
                     self._screen *= self.alpha
                     self._screen += np.sqrt(1.-self.alpha**2) * self._random_screen()
-                self._tab2d = LookupTable2D(self._xs, self._ys, self._screen, edge_mode='wrap')
+                # Make a table, copy the x,y,f arrays to shared memory, make a new table that
+                # points to those locations.
+                self._setShare()
         self._time = float(t)
 
     def _reset(self):
@@ -311,12 +521,9 @@ class AtmosphericScreen(object):
         self._time = 0.0
 
         # Only need to reset/create tab2d if not frozen or doesn't already exist
-        if not self.reversible or not hasattr(self, '_tab2d'):
+        if not self.reversible or not self._objDict['instantiated'].value:
             self._screen = self._random_screen()
-            self._xs = np.linspace(-0.5*self.screen_size, 0.5*self.screen_size, self.npix,
-                                   endpoint=False)
-            self._ys = self._xs
-            self._tab2d = LookupTable2D(self._xs, self._ys, self._screen, edge_mode='wrap')
+            self._setShare()
 
     # Note -- use **kwargs here so that AtmosphericScreen.stepk and OpticalScreen.stepk
     # can use the same signature, even though they depend on different parameters.
@@ -597,8 +804,9 @@ def Atmosphere(screen_size, rng=None, _bar=None, **kwargs):
         del kwargs['speed']
         del kwargs['direction']
 
-    # Determine broadcast size
-    nmax = max(len(v) for v in kwargs.values() if hasattr(v, '__len__'))
+    # Determine broadcast size.
+    # Note: treat string as a single scalar value, not a vector of characters
+    nmax = max(len(v) for v in kwargs.values() if hasattr(v, '__len__') and not isinstance(v, str))
 
     # Broadcast r0_500 here, since logical combination of indiv layers' r0s is complex:
     if len(kwargs['r0_500']) == 1:
@@ -695,8 +903,8 @@ class OpticalScreen(object):
         # strip any trailing zeros.
         if self.aberrations[-1] == 0:
             self.aberrations = np.trim_zeros(self.aberrations, trim='b')
-            if len(self.aberrations) == 0:  # Don't let it be zero length.
-                self.aberrations = np.array([0])
+            if len(self.aberrations) <= 1:  # Don't let it be length zero or one though.
+                self.aberrations = np.array([0, 0])
         self.annular_zernike = annular_zernike
         self.obscuration = obscuration
         self.lam_0 = lam_0

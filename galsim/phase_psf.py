@@ -65,6 +65,7 @@ Atmosphere
   Convenience function to quickly assemble multiple AtmosphericScreens into a PhaseScreenList.
 """
 
+import sys
 from past.builtins import basestring
 from itertools import chain
 from builtins import range
@@ -827,14 +828,31 @@ class PhaseScreenList(object):
                 pass
         self._update_attrs()
 
-    def instantiate(self, _bar=None, **kwargs):
-        for layer in self:
-            try:
-                layer.instantiate(**kwargs)
-            except AttributeError:
-                pass
-            if _bar:  # pragma: no cover
-                _bar.update()
+    def instantiate(self, pool=None, _bar=None, **kwargs):
+        """Instantiate the screens in this PhaseScreenList.
+
+        @param pool      A multiprocessing.Pool object to use to instantiate screens in parallel.
+        @param **kwargs  Keyword arguments to forward to screen.instantiate().
+        """
+        if pool is not None:
+            results = []
+            for layer in self:
+                try:
+                    results.append(pool.apply_async(layer.instantiate, kwds=kwargs))
+                except AttributeError:  # OpticalScreen has no instantiate method
+                    pass
+                if _bar:  # pragma: no cover
+                    _bar.update()
+            for r in results:
+                r.wait()
+        else:
+            for layer in self:
+                try:
+                    layer.instantiate(**kwargs)
+                except AttributeError:
+                    pass
+                if _bar:
+                    _bar.update()
 
     def _delayCalculation(self, psf):
         """Add psf to delayed calculation list."""
@@ -1290,7 +1308,7 @@ class PhaseScreenPSF(GSObject):
         else:
             maxk = self.aper._getMaxK(self.lam, self.scale_unit)
         image = _Image(np.array([[self._flux]], dtype=np.float),
-                             _BoundsI(1, 1, 1, 1), PixelScale(1.))
+                       _BoundsI(1, 1, 1, 1), PixelScale(1.))
         interpolant = 'delta'  # Use delta so it doesn't contribute to stepk
         return InterpolatedImage(
                 image, pad_factor=1.0, x_interpolant=interpolant,

@@ -21,6 +21,7 @@ import os
 import numpy as np
 
 import galsim
+import unittest
 from galsim_test_helpers import *
 
 
@@ -866,7 +867,6 @@ def test_phase_gradient_shoot():
 @timer
 def test_input():
     """Check that exceptions are raised for invalid input"""
-
     # Specifying only one of alpha and time_step is an error.
     assert_raises(ValueError, galsim.AtmosphericScreen, screen_size=10.0, time_step=0.01)
     assert_raises(ValueError, galsim.AtmosphericScreen, screen_size=10.0, alpha=0.997)
@@ -921,6 +921,7 @@ def test_speedup():
     t1 = time.time()
     print("Time for geometric approximation draw: {:6.4f}s".format(t1-t0))
     assert (t1-t0) < 0.1, "Photon-shooting took too long ({0} s).".format(t1-t0)
+
 
 @timer
 def test_instantiation_check():
@@ -1081,6 +1082,152 @@ def test_withGSP():
     assert optPSF.stepk != optPSF2.stepk
     assert optPSF.drawImage().bounds != optPSF2.drawImage().bounds
 
+
+def dummyWork(i, atm):
+    rng = galsim.UniformDeviate(i+10)
+    theta = (rng()*galsim.degrees, rng()*galsim.degrees)
+    psf = atm.makePSF(exptime=1.0, diam=1.1, lam=1000.0, theta=theta)
+    return psf.drawImage(nx=32, ny=32, scale=0.2, n_photons=1000, method='phot', rng=rng)
+
+
+@timer
+def test_shared_memory():
+    """Test that shared memory hooks to AtmosphericScreen work.
+    """
+    import multiprocessing as mp
+    # Make the atmosphere
+    seed = 12345
+    r0_500 = 0.15  # m
+    L0 = 20.0  # m
+    nlayers = 6
+    screen_size = 102.4  # m
+    screen_scale = 0.1 # m
+    max_speed = 20  # m/s
+    rng = galsim.BaseDeviate(seed)
+    u = galsim.UniformDeviate(rng)
+    Ellerbroek_alts = [0.0, 2.58, 5.16, 7.73, 12.89, 15.46]  # km
+    Ellerbroek_weights = [0.652, 0.172, 0.055, 0.025, 0.074, 0.022]
+    Ellerbroek_interp = galsim.LookupTable(
+            Ellerbroek_alts,
+            Ellerbroek_weights,
+            interpolant='linear')
+    alts = np.max(Ellerbroek_alts)*np.arange(nlayers)/(nlayers-1)
+    weights = Ellerbroek_interp(alts)
+    weights /= sum(weights)
+    spd = []  # Wind speed in m/s
+    dirn = [] # Wind direction in radians
+    r0_500s = [] # Fried parameter in m at a wavelength of 500 nm.
+    for i in range(nlayers):
+        spd.append(u()*max_speed)
+        dirn.append(u()*360*galsim.degrees)
+        r0_500s.append(r0_500*weights[i]**(-3./5))
+    rng2 = rng.duplicate()
+
+    if sys.version_info >= (3,4):
+        if __name__ == "__main__":
+            ctxs = [None, mp.get_context("fork"), mp.get_context("spawn"), "forkserver"]
+        else:
+            ctxs = [None, mp.get_context("fork")]
+    else:
+        ctxs = [None]  # Only supported ctx on py27
+
+    for ctx in ctxs:
+        atmPar = galsim.Atmosphere(
+            r0_500=r0_500, L0=L0, speed=spd, direction=dirn, altitude=alts,
+            rng=rng.duplicate(),
+            screen_size=screen_size, screen_scale=screen_scale,
+            mp_context=ctx)
+        atmSer = galsim.Atmosphere(
+            r0_500=r0_500, L0=L0, speed=spd, direction=dirn, altitude=alts,
+            rng=rng.duplicate(),
+            screen_size=screen_size, screen_scale=screen_scale,
+            mp_context=ctx)
+        # Add in an Optical Screen for good measure
+        atmPar.append(galsim.OpticalScreen(diam=1.1))
+        atmSer.append(galsim.OpticalScreen(diam=1.1))
+        # make a dummy PSF so we can get kmax for screen instantiation
+        psf = atmPar.makePSF(diam=1.1, lam=1000.0)
+        kmax = psf.screen_kmax
+
+        if sys.version_info >= (3,4):
+            if ctx in (None, "forkserver"):
+                Pool = mp.get_context(ctx).Pool
+            else:
+                Pool = ctx.Pool
+        else:
+            from multiprocessing import Pool
+        # Block below would be prettier using Pool context manager, but not available in py2.7
+        pool = Pool(
+            None,
+            initializer=galsim.phase_screens.initWorker,
+            initargs=galsim.phase_screens.initWorkerArgs()
+        )
+        # Instantiate using the pool:
+        atmPar.instantiate(pool=pool, kmax=kmax)
+
+        resultsParallel = []
+        for i in range(10):
+            resultsParallel.append(pool.apply_async(dummyWork, (i, atmPar)))
+        for r in resultsParallel:
+            r.wait()
+        resultsParallel = [r.get() for r in resultsParallel]
+        pool.close()
+
+        # Serial comparison, also reinstantiate the atm here without using the pool
+        atmSer.instantiate(pool=None, kmax=kmax)
+
+        resultsSerial = []
+        for i in range(10):
+            resultsSerial.append(dummyWork(i, atmSer))
+
+        assert resultsSerial == resultsParallel
+
+        # Try to trigger both branches of inner instantiation check (after lock acquisition) by
+        # using several processes at once to instantiate a single layer.  It's a race, and coverage
+        # depends on when the apply_asyncs are actually started, so might not actually hit both
+        # branches
+        atm = galsim.Atmosphere(r0_500=r0_500, L0=L0, speed=spd, direction=dirn, altitude=alts,
+                                rng=rng.duplicate(),
+                                screen_size=screen_size, screen_scale=screen_scale,
+                                mp_context=ctx)
+        psf = atm.makePSF(diam=1.1, lam=1000.0)
+        kmax = psf.screen_kmax
+        pool = Pool(
+            None,
+            initializer=galsim.phase_screens.initWorker,
+            initargs=galsim.phase_screens.initWorkerArgs()
+        )
+        results = []
+        for _ in range(10):
+            results.append(pool.apply_async(atm[0].instantiate, kwds={'kmax':kmax}))
+        for r in results:
+            r.wait()
+        pool.close()
+
+
+    if sys.version_info >= (3,4):
+        ctx = mp.get_context("spawn")
+        with assert_raises(galsim.GalSimNotImplementedError):
+            atm = galsim.Atmosphere(
+                screen_size=10.0, altitude=10.0, alpha=0.997, time_step=0.01, rng=rng,
+                mp_context=ctx
+            )
+
+    # Atm ctor can't catch alpha != 1.0 error when trying to use shared memory with mp_context=None,
+    # but initWorkerArgs can.
+    atm = galsim.Atmosphere(screen_size=10.0, altitude=10.0, alpha=0.997, time_step=0.01, rng=rng)
+    if sys.version_info >= (3,4):
+        Pool = mp.get_context(None).Pool
+    else:
+        from multiprocessing import Pool
+    with assert_raises(galsim.GalSimNotImplementedError):
+        pool = Pool(
+            None,
+            initializer=galsim.phase_screens.initWorker,
+            initargs=galsim.phase_screens.initWorkerArgs()
+        )
+
+
 if __name__ == "__main__":
     test_aperture()
     test_atm_screen_size()
@@ -1100,3 +1247,4 @@ if __name__ == "__main__":
     test_instantiation_check()
     test_gc()
     test_withGSP()
+    test_shared_memory()

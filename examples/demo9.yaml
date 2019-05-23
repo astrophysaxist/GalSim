@@ -90,7 +90,7 @@ gal :
     # reserved for shifts of a few pixels or less, nor for setting the position of the
     # object in a large image.
 
-    # We introduce here another surface brightness profile, called InclidedExponential.
+    # We introduce here another surface brightness profile, called InclinedExponential.
     # It represents a typical 3D galaxy disk profile inclined at an arbitrary angle relative
     # to face on.
     #     inclination = 0 degrees corresponds to a face-on disk, which is equivalent to the
@@ -132,7 +132,7 @@ gal :
             x_max : { type : Eval, str : "math.pi" }
 
     rotation:
-        # The InclidedExponential always inclines the galaxy around the x-axis.  We want it to
+        # The InclinedExponential always inclines the galaxy around the x-axis.  We want it to
         # be inclined around a random axis, so we rotate the galaxy by a random angle.
         type : Random
 
